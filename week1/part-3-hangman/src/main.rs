@@ -27,6 +27,14 @@ fn pick_a_random_word() -> String {
     String::from(words[rand::thread_rng().gen_range(0, words.len())].trim())
 }
 
+fn vec2str(v: &Vec<char>) -> String {
+    let mut s = String::new();
+    for c in v {
+        s.push(*c);
+    }
+    s
+}
+
 fn main() {
     let secret_word = pick_a_random_word();
     // Note: given what you know about Rust so far, it's easier to pull characters out of a
@@ -34,7 +42,43 @@ fn main() {
     // secret_word by doing secret_word_chars[i].
     let secret_word_chars: Vec<char> = secret_word.chars().collect();
     // Uncomment for debugging:
-    // println!("random word: {}", secret_word);
+    println!("[debug] random word: {}", secret_word);
+    
+    let mut so_far_word = vec!['-'; secret_word_chars.len()];
+    let mut guessed_letters = String::new();
+    let mut used_guessed = 0;
+    let mut guessd_count = 0;
+    println!("Welcome to CS110L Hangman!");
+    while NUM_INCORRECT_GUESSES - used_guessed != 0 && guessd_count != secret_word_chars.len() {
+        println!("The word so far is {}", vec2str(&so_far_word));
+        println!("You have guessed the following letters: {}", guessed_letters);
+        println!("You have {} guesses left", NUM_INCORRECT_GUESSES - used_guessed);
+        print!("Please guess a letter: ");
+        io::stdout().flush().expect("Error flushing stdout.");
+        let mut guess = String::new();
+        io::stdin().read_line(&mut guess).expect("Error reading line.");
 
-    // Your code here! :)
+        guessed_letters.push(guess.chars().nth(0).unwrap());
+        let mut right_letter = false;
+        let mut i = 0;
+        while i < secret_word_chars.len() {
+            if secret_word_chars[i] == guess.chars().nth(0).unwrap() && so_far_word[i] =='-' {
+                so_far_word[i] = secret_word_chars[i];
+                right_letter = true;
+                guessd_count += 1;
+                break;
+            }
+            i += 1;
+        }
+        if !right_letter {
+            used_guessed += 1;
+        }
+        println!();
+    }
+
+    if NUM_INCORRECT_GUESSES - used_guessed == 0 {
+        println!("Sorry, you ran out of guesses!")
+    } else {
+        println!("Congratulations you guessed the secret word: {}!", secret_word);
+    }
 }
