@@ -11,16 +11,14 @@ fn main() {
         std::process::exit(1);
     }
     let target = &args[1];
+
     match ps_utils::get_target(target) {
         Ok(process) => {
-            match process {
-                Some(p) => {
-                    p.print();
-                }
-                None => {
-                    println!("there not being any matching process");
-                    std::process::exit(1);
-                }
+            if let Some(p) = process {
+                p.print();
+            } else {
+                println!("there not being any matching process");
+                std::process::exit(1);
             }
         }
         Err(e) => {
