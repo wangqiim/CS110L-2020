@@ -16,6 +16,12 @@ fn main() {
         Ok(process) => {
             if let Some(p) = process {
                 p.print();
+                let child_procs = ps_utils::get_child_processes(p.pid).unwrap();
+                for cp in &child_procs {
+                    println!();
+                    cp.print();
+                }
+
             } else {
                 println!("there not being any matching process");
                 std::process::exit(1);
@@ -26,6 +32,7 @@ fn main() {
             std::process::exit(1);
         }
     }
+    
 }
 
 #[cfg(test)]
