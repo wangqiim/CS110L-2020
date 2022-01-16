@@ -2,6 +2,7 @@ use crate::debugger_command::DebuggerCommand;
 use crate::inferior::Inferior;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use crate::inferior::Status;
 
 pub struct Debugger {
     target: String,
@@ -32,6 +33,11 @@ impl Debugger {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
+                    // when you pause an inferior using ctrl+c, then type run, 
+                    // You should take care to kill any existing inferiors before starting new ones
+                    if let Some(ref mut inferior) = self.inferior {
+                        inferior.kill_and_reap();
+                    }
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
@@ -41,6 +47,11 @@ impl Debugger {
                         match self.inferior.as_mut().unwrap().cont() {
                             Ok(status) => {
                                 status.print_status();
+                                // reset self.inferior if it exit
+                                match status {
+                                    Status::Exited(_) | Status::Signaled(_) => self.inferior = None,
+                                    _ => {},
+                                }
                             },
                             Err(_) => {
                                 println!("Error: continue subprocess");
@@ -66,12 +77,13 @@ impl Debugger {
                             println!("Error: there is not a inferior, you shold type run at first");
                         }
                     }
-                    if let None = self.inferior {
-                        println!("Error: there is not a inferior, you shold type run at first");
-                    }
-
                 },
                 DebuggerCommand::Quit => {
+                    // if you exit DEET while a process is paused, 
+                    // You should terminate the inferior if one is running.
+                    if let Some(ref mut inferior) = self.inferior {
+                        inferior.kill_and_reap();
+                    }
                     return;
                 }
             }

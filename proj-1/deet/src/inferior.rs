@@ -97,4 +97,13 @@ impl Inferior {
             },
         }
     }
+
+    pub fn kill_and_reap(&mut self) {
+        if self.child.kill().is_err() {
+            panic!("have't proccessed");
+        }
+        if self.wait(None).is_err() {
+            panic!("have't proccessed");
+        }
+    }
 }
