@@ -5,6 +5,7 @@ use nix::unistd::Pid;
 use std::process::Child;
 use std::process::Command;
 use std::os::unix::process::CommandExt;
+use crate::dwarf_data::{DwarfData};
 
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
@@ -99,11 +100,26 @@ impl Inferior {
     }
 
     pub fn kill_and_reap(&mut self) {
-        if self.child.kill().is_err() {
-            panic!("have't proccessed");
+        self.child.kill().expect("have't proccessed");
+        self.wait(None).expect("have't proccessed");
+    }
+
+    pub fn print_backtrace(&self, debug_data: &DwarfData) -> Result<(), nix::Error> {
+        let regs = ptrace::getregs(self.pid()).unwrap();
+        // println!("%rip register: {:#x}", regs.rip);
+        // println!("{}", regs.rip as usize);
+        let mut rip_ptr = regs.rip as usize;
+        let mut base_ptr = regs.rbp as usize;
+        loop {
+            let func_name = debug_data.get_function_from_addr(rip_ptr).unwrap();
+            let line = debug_data.get_line_from_addr(rip_ptr).unwrap();
+            println!("{} ({})", func_name, line);
+            if func_name == "main" {
+                break;
+            }
+            rip_ptr = ptrace::read(self.pid(), (base_ptr + 8) as ptrace::AddressType).unwrap() as usize;
+            base_ptr = ptrace::read(self.pid(), base_ptr as ptrace::AddressType).unwrap() as usize;
         }
-        if self.wait(None).is_err() {
-            panic!("have't proccessed");
-        }
+        Ok(())
     }
 }
