@@ -19,6 +19,22 @@ pub enum Status {
     Signaled(signal::Signal),
 }
 
+impl Status {
+    pub fn print_status(&self) {
+        match self {
+            Status::Stopped(sig, _) => {
+                println!("inferior stopped due to a signal: {}", sig.as_str());
+            },
+            Status::Exited(code) => {
+                println!("inferior exited exit status code: {}", code);
+            },
+            Status::Signaled(sig) => {
+                println!("inferior exited due to a signal: {}", sig.as_str());
+            }
+        }
+    }
+}
+
 /// This function calls ptrace with PTRACE_TRACEME to enable debugging on a process. You should use
 /// pre_exec with Command to call this in the child process.
 fn child_traceme() -> Result<(), std::io::Error> {
@@ -77,7 +93,7 @@ impl Inferior {
                 self.wait(None)
             },
             Err(_) => {
-                panic!("not emplemented");
+                panic!("have't proccessed");
             },
         }
     }
