@@ -2,6 +2,7 @@ use crate::debugger_command::DebuggerCommand;
 use crate::inferior::Inferior;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use crate::inferior::Status;
 
 pub struct Debugger {
     target: String,
@@ -38,6 +39,24 @@ impl Debugger {
                         // TODO (milestone 1): make the inferior run
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
+                        match self.inferior.as_mut().unwrap().cont() {
+                            Ok(status) => {
+                                match status {
+                                    Status::Stopped(sig, _) => {
+                                        println!("inferior stopped due to a signal: {}", sig.as_str());
+                                    },
+                                    Status::Exited(code) => {
+                                        println!("inferior exited exit status code: {}", code);
+                                    },
+                                    Status::Signaled(sig) => {
+                                        println!("inferior exited due to a signal: {}", sig.as_str());
+                                    }
+                                }
+                            },
+                            Err(_) => {
+                                println!("Error continue subprocess");
+                            }
+                        }
                     } else {
                         println!("Error starting subprocess");
                     }
