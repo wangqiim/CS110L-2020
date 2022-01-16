@@ -11,6 +11,8 @@ pub struct Debugger {
     readline: Editor<()>,
     inferior: Option<Inferior>,
     debug_data: DwarfData,
+    break_point_num: i32,
+    break_point_list: Vec<usize>,
 }
 
 impl Debugger {
@@ -29,6 +31,9 @@ impl Debugger {
             }
         };
 
+        // debug point
+        debug_data.print();
+
         let history_path = format!("{}/.deet_history", std::env::var("HOME").unwrap());
         let mut readline = Editor::<()>::new();
         // Attempt to load history from ~/.deet_history if it exists
@@ -40,6 +45,8 @@ impl Debugger {
             readline,
             inferior: None,
             debug_data: debug_data,
+            break_point_num: 0,
+            break_point_list: vec![],
         }
     }
 
@@ -52,13 +59,13 @@ impl Debugger {
                     if let Some(ref mut inferior) = self.inferior {
                         inferior.kill_and_reap();
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args) {
+                    if let Some(inferior) = Inferior::new(&self.target, &args, &self.break_point_list) {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // TODO (milestone 1): make the inferior run
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
-                        match self.inferior.as_mut().unwrap().cont() {
+                        match self.inferior.as_mut().unwrap().cont(&self.break_point_list) {
                             Ok(status) => {
                                 status.print_status(&self.debug_data);
                                 // reset self.inferior if it exit
@@ -77,8 +84,8 @@ impl Debugger {
                 },
                 DebuggerCommand::Continue => {
                     match self.inferior {
-                        Some(ref inferior) => {
-                            match inferior.cont() {
+                        Some(ref mut inferior) => {
+                            match inferior.cont(&self.break_point_list) {
                                 Ok(status) => {
                                     status.print_status(&self.debug_data);
                                     // reset self.inferior if it exit
@@ -114,8 +121,10 @@ impl Debugger {
                             println!("Error: there is not a inferior, you should type run at first");
                         }
                     }
-                }
-
+                },
+                DebuggerCommand::BreakPoint(args) => {
+                    self.break_point(args);
+                },
             }
         }
     }
@@ -160,4 +169,33 @@ impl Debugger {
             }
         }
     }
+
+    fn break_point(&mut self, args: Vec<String>) {
+        // check
+        if args.len() != 1 {
+            println!("Usage example: type break *0x0123456 ");
+            return;
+        }
+        // start with *
+        if args[0].to_lowercase().starts_with("*") {
+            let addr = &args[0][1..];
+            let rip = parse_address(addr).unwrap();
+            self.break_point_list.push(rip);
+            println!("Set breakpoint {} at {}", self.break_point_num, addr);
+            self.break_point_num += 1;
+        } else {
+            println!("Usage example: type break *0x0123456 ");
+            return;
+        }
+    }
+}
+
+// breakpoint
+fn parse_address(addr: &str) -> Option<usize> {
+    let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
+        &addr[2..]
+    } else {
+        &addr
+    };
+    usize::from_str_radix(addr_without_0x, 16).ok()
 }

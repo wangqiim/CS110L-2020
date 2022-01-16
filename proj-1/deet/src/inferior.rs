@@ -6,6 +6,7 @@ use std::process::Child;
 use std::process::Command;
 use std::os::unix::process::CommandExt;
 use crate::dwarf_data::{DwarfData};
+use std::mem::size_of;
 
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
@@ -53,17 +54,22 @@ pub struct Inferior {
 impl Inferior {
     /// Attempts to start a new inferior process. Returns Some(Inferior) if successful, or None if
     /// an error is encountered.
-    pub fn new(target: &str, args: &Vec<String>) -> Option<Inferior> {
+    pub fn new(target: &str, args: &Vec<String>, break_point_list: &Vec<usize>) -> Option<Inferior> {
         let mut cmd = Command::new(target);
         let cmd = cmd.args(args);
         unsafe {
             cmd.pre_exec(child_traceme);
         }
         let child = cmd.spawn().ok()?;
-        let inferior = Inferior{ child: child };
+        let mut inferior = Inferior{ child: child };
 
         if let Ok(Status::Stopped(sig, _)) = inferior.wait(None) {
             if sig == signal::Signal::SIGTRAP {
+                // after you wait for SIGTRAP (indicating that the inferior has fully loaded) but before returning
+                // you should install these breakpoints in the child process.
+                for rid in break_point_list {
+                    inferior.write_byte(*rid, 0xcc).unwrap();
+                }
                 return Some(inferior);
             }
         }
@@ -89,7 +95,10 @@ impl Inferior {
         })
     }
 
-    pub fn cont(&self) -> Result<Status, nix::Error> {
+    pub fn cont(&mut self, break_point_list: &Vec<usize>) -> Result<Status, nix::Error> {
+        for rid in break_point_list {
+            self.write_byte(*rid, 0xcc).unwrap();
+        }
         match ptrace::cont(self.pid(), None) {
             Ok(_) => {
                 self.wait(None)
@@ -123,4 +132,24 @@ impl Inferior {
         }
         Ok(())
     }
+
+    fn write_byte(&mut self, addr: usize, val: u8) -> Result<u8, nix::Error> {
+        let aligned_addr = align_addr_to_word(addr);
+        let byte_offset = addr - aligned_addr;
+        let word = ptrace::read(self.pid(), aligned_addr as ptrace::AddressType)? as u64;
+        let orig_byte = (word >> 8 * byte_offset) & 0xff;
+        let masked_word = word & !(0xff << 8 * byte_offset);
+        let updated_word = masked_word | ((val as u64) << 8 * byte_offset);
+        ptrace::write(
+            self.pid(),
+            aligned_addr as ptrace::AddressType,
+            updated_word as *mut std::ffi::c_void,
+        )?;
+        Ok(orig_byte as u8)
+    }
+}
+
+
+fn align_addr_to_word(addr: usize) -> usize {
+    addr & (-(size_of::<usize>() as isize) as usize)
 }
