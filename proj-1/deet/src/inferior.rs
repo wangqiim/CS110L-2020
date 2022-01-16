@@ -21,10 +21,11 @@ pub enum Status {
 }
 
 impl Status {
-    pub fn print_status(&self) {
+    pub fn print_status(&self, debug_data: &DwarfData) {
         match self {
-            Status::Stopped(sig, _) => {
+            Status::Stopped(sig, rip) => {
                 println!("inferior stopped due to a signal: {}", sig.as_str());
+                println!("Stopped at ({})", debug_data.get_line_from_addr(*rip).unwrap())
             },
             Status::Exited(code) => {
                 println!("inferior exited exit status code: {}", code);

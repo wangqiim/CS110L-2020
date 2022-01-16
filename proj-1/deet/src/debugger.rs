@@ -60,7 +60,7 @@ impl Debugger {
                         // to the Inferior object
                         match self.inferior.as_mut().unwrap().cont() {
                             Ok(status) => {
-                                status.print_status();
+                                status.print_status(&self.debug_data);
                                 // reset self.inferior if it exit
                                 match status {
                                     Status::Exited(_) | Status::Signaled(_) => self.inferior = None,
@@ -80,7 +80,12 @@ impl Debugger {
                         Some(ref inferior) => {
                             match inferior.cont() {
                                 Ok(status) => {
-                                    status.print_status();
+                                    status.print_status(&self.debug_data);
+                                    // reset self.inferior if it exit
+                                    match status {
+                                        Status::Exited(_) | Status::Signaled(_) => self.inferior = None,
+                                        _ => {},
+                                    }
                                 },
                                 Err(_) => {
                                     println!("Error: continue subprocess");
