@@ -7,6 +7,19 @@ use std::process::Command;
 use std::os::unix::process::CommandExt;
 use crate::dwarf_data::{DwarfData};
 use std::mem::size_of;
+use std::collections::HashMap;
+
+#[derive(Clone)]
+pub struct Breakpoint {
+    addr: usize,
+    orig_byte: u8,
+}
+
+impl Breakpoint {
+    pub fn new(addr: usize, orig_byte: u8) -> Breakpoint {
+        Breakpoint { addr: addr, orig_byte: orig_byte }
+    }
+}
 
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
@@ -54,7 +67,7 @@ pub struct Inferior {
 impl Inferior {
     /// Attempts to start a new inferior process. Returns Some(Inferior) if successful, or None if
     /// an error is encountered.
-    pub fn new(target: &str, args: &Vec<String>, break_point_list: &Vec<usize>) -> Option<Inferior> {
+    pub fn new(target: &str, args: &Vec<String>, break_points: &mut HashMap<usize, Breakpoint>) -> Option<Inferior> {
         let mut cmd = Command::new(target);
         let cmd = cmd.args(args);
         unsafe {
@@ -67,8 +80,9 @@ impl Inferior {
             if sig == signal::Signal::SIGTRAP {
                 // after you wait for SIGTRAP (indicating that the inferior has fully loaded) but before returning
                 // you should install these breakpoints in the child process.
-                for rid in break_point_list {
-                    inferior.write_byte(*rid, 0xcc).unwrap();
+                for (rid, break_point) in break_points {
+                    let origni_byte = inferior.write_byte(*rid, 0xcc).unwrap();
+                    break_point.orig_byte = origni_byte;
                 }
                 return Some(inferior);
             }
@@ -95,18 +109,26 @@ impl Inferior {
         })
     }
 
-    pub fn cont(&mut self, break_point_list: &Vec<usize>) -> Result<Status, nix::Error> {
-        for rid in break_point_list {
-            self.write_byte(*rid, 0xcc).unwrap();
+    pub fn cont(&mut self, break_points: &HashMap<usize, Breakpoint>) -> Result<Status, nix::Error> {
+        let mut regs = ptrace::getregs(self.pid()).unwrap();
+        let rip = regs.rip as usize;
+        if let Some(ori_instr) = break_points.get(&(rip - 1)) {
+            println!("ori_instr = {}", ori_instr.orig_byte);
+            self.write_byte(rip - 1, ori_instr.orig_byte).unwrap();
+            regs.rip = (rip - 1) as u64;
+            ptrace::setregs(self.pid(), regs).unwrap();
+            
+            ptrace::step(self.pid(), None).unwrap();
+            match self.wait(None).unwrap() {
+                Status::Exited(exit_code) => return Ok(Status::Exited(exit_code)), 
+                Status::Signaled(signal) => return Ok(Status::Signaled(signal)),
+                Status::Stopped(_, _) => {  
+                    self.write_byte(rip - 1, 0xcc).unwrap();
+                },
+            }
         }
-        match ptrace::cont(self.pid(), None) {
-            Ok(_) => {
-                self.wait(None)
-            },
-            Err(_) => {
-                panic!("have't proccessed");
-            },
-        }
+        ptrace::cont(self.pid(), None).unwrap();
+        self.wait(None)
     }
 
     pub fn kill_and_reap(&mut self) {
@@ -148,7 +170,6 @@ impl Inferior {
         Ok(orig_byte as u8)
     }
 }
-
 
 fn align_addr_to_word(addr: usize) -> usize {
     addr & (-(size_of::<usize>() as isize) as usize)

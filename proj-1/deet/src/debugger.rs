@@ -2,8 +2,9 @@ use crate::debugger_command::DebuggerCommand;
 use crate::inferior::Inferior;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use crate::inferior::Status;
+use crate::inferior::{Status, Breakpoint};
 use crate::dwarf_data::{DwarfData, Error as DwarfError};
+use std::collections::HashMap;
 
 pub struct Debugger {
     target: String,
@@ -11,8 +12,7 @@ pub struct Debugger {
     readline: Editor<()>,
     inferior: Option<Inferior>,
     debug_data: DwarfData,
-    break_point_num: i32,
-    break_point_list: Vec<usize>,
+    break_points: HashMap<usize, Breakpoint>,
 }
 
 impl Debugger {
@@ -45,8 +45,7 @@ impl Debugger {
             readline,
             inferior: None,
             debug_data: debug_data,
-            break_point_num: 0,
-            break_point_list: vec![],
+            break_points: HashMap::new(),
         }
     }
 
@@ -59,13 +58,13 @@ impl Debugger {
                     if let Some(ref mut inferior) = self.inferior {
                         inferior.kill_and_reap();
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args, &self.break_point_list) {
+                    if let Some(inferior) = Inferior::new(&self.target, &args, &mut self.break_points) {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // TODO (milestone 1): make the inferior run
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
-                        match self.inferior.as_mut().unwrap().cont(&self.break_point_list) {
+                        match self.inferior.as_mut().unwrap().cont(&self.break_points) {
                             Ok(status) => {
                                 status.print_status(&self.debug_data);
                                 // reset self.inferior if it exit
@@ -85,7 +84,7 @@ impl Debugger {
                 DebuggerCommand::Continue => {
                     match self.inferior {
                         Some(ref mut inferior) => {
-                            match inferior.cont(&self.break_point_list) {
+                            match inferior.cont(&self.break_points) {
                                 Ok(status) => {
                                     status.print_status(&self.debug_data);
                                     // reset self.inferior if it exit
@@ -180,9 +179,8 @@ impl Debugger {
         if args[0].to_lowercase().starts_with("*") {
             let addr = &args[0][1..];
             let rip = parse_address(addr).unwrap();
-            self.break_point_list.push(rip);
-            println!("Set breakpoint {} at {}", self.break_point_num, addr);
-            self.break_point_num += 1;
+            println!("Set breakpoint {} at {}", self.break_points.len(), addr);
+            self.break_points.insert(rip, Breakpoint::new(rip, 0));
         } else {
             println!("Usage example: type break *0x0123456 ");
             return;
