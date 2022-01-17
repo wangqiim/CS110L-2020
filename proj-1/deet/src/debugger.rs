@@ -175,16 +175,24 @@ impl Debugger {
             println!("Usage example: type break *0x0123456 ");
             return;
         }
+        let rip: usize;
         // start with *
         if args[0].to_lowercase().starts_with("*") {
             let addr = &args[0][1..];
-            let rip = parse_address(addr).unwrap();
-            println!("Set breakpoint {} at {}", self.break_points.len(), addr);
-            self.break_points.insert(rip, Breakpoint::new(rip, 0));
+            rip = parse_address(addr).unwrap();
+        } else if let Ok(line) = args[0].parse::<usize>() {
+            rip = self.debug_data.get_addr_for_line(None, line).unwrap();
+        } else if self.debug_data.get_addr_for_function(None, &args[0]).is_some() {
+            rip = self.debug_data.get_addr_for_function(None, &args[0]).unwrap();
         } else {
-            println!("Usage example: type break *0x0123456 ");
+            println!("Usage example:");
+            println!("\tbreak *0x0123456 ");
+            println!("\tbreak main");
+            println!("\tbreak 15");
             return;
         }
+        println!("Set breakpoint {} at {:#x}", self.break_points.len(), rip);
+        self.break_points.insert(rip, Breakpoint::new(rip, 0));
     }
 }
 
