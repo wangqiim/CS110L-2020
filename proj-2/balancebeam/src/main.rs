@@ -9,6 +9,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 use tokio::sync::Mutex;
 use std::io::ErrorKind;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::delay_for;
 
 /// Contains information parsed from the command-line invocation of balancebeam. The Clap macros
 /// provide a fancy way to automatically construct a command-line argument parser.
@@ -93,14 +96,20 @@ async fn main() -> io::Result<()> {
 
     let init_activate_num = options.upstream.len();
     // Handle incoming connections
-    let state = ProxyState {
+    let state = Arc::new(ProxyState {
         upstream_addresses: options.upstream,
         active_health_check_interval: options.active_health_check_interval,
         active_health_check_path: options.active_health_check_path,
         max_requests_per_minute: options.max_requests_per_minute,
         activate_addresses: Mutex::new((init_activate_num, vec![true; init_activate_num])),
-    };
+    });
 
+    { // activate health check
+        let state = state.clone();
+        tokio::spawn(async move {
+            active_health_check(state).await;
+        });
+    }
     loop {
         let (socket, _) = listener.accept().await?;
         handle_connection(socket, &state).await;
@@ -224,5 +233,46 @@ async fn handle_connection(mut client_conn: TcpStream, state: &ProxyState) {
         // Forward the response to the client
         send_response(&mut client_conn, &response).await;
         log::debug!("Forwarded response to client");
+    }
+}
+
+async fn check_server(ip_idx: usize, state: &ProxyState) -> bool {
+    let ip_addr = &state.upstream_addresses[ip_idx];
+    if let Ok(mut stream) = TcpStream::connect(ip_addr).await {
+        let request = http::Request::builder()
+            .method(http::Method::GET)
+            .uri(&state.active_health_check_path)
+            .header("Host", ip_addr)
+            .body(Vec::new())
+            .unwrap();
+        if request::write_to_stream(&request, &mut stream).await.is_ok() {
+            if let Ok(resp) = response::read_from_stream(&mut stream, &http::Method::GET).await {
+                if resp.status().as_u16() == 200 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+async fn active_health_check(state: Arc<ProxyState>) {
+    let interval = state.active_health_check_interval as u64;
+    loop {
+        delay_for(Duration::from_secs(interval)).await;
+        for ip_idx in 0..state.upstream_addresses.len() {
+            let mut active_addrs = state.activate_addresses.lock().await;
+            if check_server(ip_idx, &state).await {
+                if active_addrs.1[ip_idx] == false {
+                    active_addrs.0 += 1;
+                    active_addrs.1[ip_idx] = true;
+                }
+            } else {
+                if active_addrs.1[ip_idx] == true {
+                    active_addrs.0 -= 1;
+                    active_addrs.1[ip_idx] = false;
+                }
+            }
+        }
     }
 }
