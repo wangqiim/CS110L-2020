@@ -12,6 +12,9 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::delay_for;
+use std::collections::HashMap;
+
+const SECONDS_PER_MINUTE: u64 = 60;
 
 /// Contains information parsed from the command-line invocation of balancebeam. The Clap macros
 /// provide a fancy way to automatically construct a command-line argument parser.
@@ -51,6 +54,7 @@ struct CmdOptions {
 /// to, what servers have failed, rate limiting counts, etc.)
 ///
 /// You should add fields to this struct in later milestones.
+#[derive(Debug)]
 struct ProxyState {
     /// How frequently we check whether upstream servers are alive (Milestone 4)
     #[allow(dead_code)]
@@ -65,6 +69,8 @@ struct ProxyState {
     upstream_addresses: Vec<String>,
     /// (activate_num, activate_vec)
     activate_addresses: Mutex<(usize, Vec<bool>)>,
+    /// ratio limiting
+    ratio_limit: Mutex<HashMap<String, usize>>
 }
 
 #[tokio::main]
@@ -102,7 +108,10 @@ async fn main() -> io::Result<()> {
         active_health_check_path: options.active_health_check_path,
         max_requests_per_minute: options.max_requests_per_minute,
         activate_addresses: Mutex::new((init_activate_num, vec![true; init_activate_num])),
+        ratio_limit: Mutex::new(HashMap::new()),
     });
+
+    log::info!("ProxyState {:?}", state);
 
     { // activate health check
         let state = state.clone();
@@ -110,6 +119,14 @@ async fn main() -> io::Result<()> {
             active_health_check(state).await;
         });
     }
+
+    if state.max_requests_per_minute != 0 { // Rate limiting
+        let state = state.clone();
+        tokio::spawn(async move {
+            rate_limiting_refresh(state, SECONDS_PER_MINUTE).await;
+        });
+    }
+
     loop {
         let (socket, _) = listener.accept().await?;
         handle_connection(socket, &state).await;
@@ -157,6 +174,20 @@ async fn send_response(client_conn: &mut TcpStream, response: &http::Response<Ve
 async fn handle_connection(mut client_conn: TcpStream, state: &ProxyState) {
     let client_ip = client_conn.peer_addr().unwrap().ip().to_string();
     log::info!("Connection received from {}", client_ip);
+    if state.max_requests_per_minute != 0 {
+        let mut ratio_limit_map = state.ratio_limit.lock().await;
+        if !ratio_limit_map.contains_key(&client_ip) {
+            ratio_limit_map.insert(client_ip.clone(), 0);
+        }
+        let new_cnt = *ratio_limit_map.get(&client_ip).unwrap() + 1;
+        ratio_limit_map.insert(client_ip.clone(), new_cnt);
+        log::warn!("[ratio limit] ip: {}, count {}", client_ip, new_cnt);
+        if new_cnt > state.max_requests_per_minute {
+            let response = response::make_http_error(http::StatusCode::TOO_MANY_REQUESTS);
+            send_response(&mut client_conn, &response).await;
+            return;
+        }
+    }
 
     // Open a connection to a random destination server
     let mut upstream_conn = match connect_to_upstream(&state).await {
@@ -276,3 +307,11 @@ async fn active_health_check(state: Arc<ProxyState>) {
         }
     }
 }
+
+async fn rate_limiting_refresh(state: Arc<ProxyState>, refresh_interval: u64) {
+    loop {
+        delay_for(Duration::from_secs(refresh_interval)).await;
+        state.ratio_limit.lock().await.clear();
+    }
+}
+
