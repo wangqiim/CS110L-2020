@@ -7,6 +7,9 @@ use rand::{Rng, SeedableRng};
 use std::io;
 use tokio::net::{TcpListener, TcpStream};
 
+use tokio::sync::Mutex;
+use std::io::ErrorKind;
+
 /// Contains information parsed from the command-line invocation of balancebeam. The Clap macros
 /// provide a fancy way to automatically construct a command-line argument parser.
 #[derive(Parser, Debug)]
@@ -57,6 +60,8 @@ struct ProxyState {
     max_requests_per_minute: usize,
     /// Addresses of servers that we are proxying to
     upstream_addresses: Vec<String>,
+    /// (activate_num, activate_vec)
+    activate_addresses: Mutex<(usize, Vec<bool>)>,
 }
 
 #[tokio::main]
@@ -86,12 +91,14 @@ async fn main() -> io::Result<()> {
     };
     log::info!("Listening for requests on {}", options.bind);
 
+    let init_activate_num = options.upstream.len();
     // Handle incoming connections
     let state = ProxyState {
         upstream_addresses: options.upstream,
         active_health_check_interval: options.active_health_check_interval,
         active_health_check_path: options.active_health_check_path,
         max_requests_per_minute: options.max_requests_per_minute,
+        activate_addresses: Mutex::new((init_activate_num, vec![true; init_activate_num])),
     };
 
     loop {
@@ -102,13 +109,31 @@ async fn main() -> io::Result<()> {
 
 async fn connect_to_upstream(state: &ProxyState) -> Result<TcpStream, std::io::Error> {
     let mut rng = rand::rngs::StdRng::from_entropy();
-    let upstream_idx = rng.gen_range(0, state.upstream_addresses.len());
-    let upstream_ip = &state.upstream_addresses[upstream_idx];
-    TcpStream::connect(upstream_ip).await.or_else(|err| {
-        log::error!("Failed to connect to upstream {}: {}", upstream_ip, err);
-        Err(err)
-    })
-    // TODO: implement failover (milestone 3)
+    loop {
+        let upstream_idx;
+        { // Reduce the granularity of the lock
+            let active_addrs = state.activate_addresses.lock().await;
+            if active_addrs.0 == 0 {
+                return Err(std::io::Error::new(ErrorKind::Other, "All the upstream servers are down!"));
+            }
+            upstream_idx = rng.gen_range(0, state.upstream_addresses.len());
+            if !active_addrs.1[upstream_idx] {
+                continue;
+            }
+        }
+        let upstream_ip = &state.upstream_addresses[upstream_idx];
+        if let Ok(stream) = TcpStream::connect(upstream_ip).await {
+            return Ok(stream);
+        } else {
+            { // Reduce the granularity of the lock
+                let mut active_addrs = state.activate_addresses.lock().await;
+                if active_addrs.1[upstream_idx] { // double check
+                    active_addrs.0 -= 1;
+                    active_addrs.1[upstream_idx] = false;
+                }
+            }
+        }
+    }
 }
 
 async fn send_response(client_conn: &mut TcpStream, response: &http::Response<Vec<u8>>) {
